@@ -10,8 +10,8 @@ import (
 	"io"
 	"testing"
 
-	"golang.org/x/crypto/openpgp"
-	"golang.org/x/crypto/openpgp/packet"
+	"github.com/ci-plugins/crypto-go/openpgp"
+	"github.com/ci-plugins/crypto-go/openpgp/packet"
 )
 
 func testParse(t *testing.T, input []byte, expected, expectedPlaintext string) {

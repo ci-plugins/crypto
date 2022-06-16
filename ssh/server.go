@@ -66,6 +66,12 @@ type ServerConfig struct {
 
 	hostKeys []Signer
 
+	// ImplictAuthMethod is sent to the client in the list of acceptable
+	// authentication methods. To make an authentication decision based on
+	// connection metadata use NoClientAuthCallback. If NoClientAuthCallback is
+	// nil, the value is unused.
+	ImplictAuthMethod string
+
 	// NoClientAuth is true if clients are allowed to connect without
 	// authenticating.
 	// To determine NoClientAuth at runtime, set NoClientAuth to true
@@ -76,6 +82,7 @@ type ServerConfig struct {
 	// attempts to authenticate with auth method "none".
 	// NoClientAuth must also be set to true for this be used, or
 	// this func is unused.
+	// If the function returns ErrDenied, the connection is terminated.
 	NoClientAuthCallback func(ConnMetadata) (*Permissions, error)
 
 	// MaxAuthTries specifies the maximum number of authentication attempts
@@ -86,6 +93,7 @@ type ServerConfig struct {
 
 	// PasswordCallback, if non-nil, is called when a user
 	// attempts to authenticate using a password.
+	// If the function returns ErrDenied, the connection is terminated.
 	PasswordCallback func(conn ConnMetadata, password []byte) (*Permissions, error)
 
 	// PublicKeyCallback, if non-nil, is called when a client
@@ -96,6 +104,7 @@ type ServerConfig struct {
 	// offered is in fact used to authenticate. To record any data
 	// depending on the public key, store it inside a
 	// Permissions.Extensions entry.
+	// If the function returns ErrDenied, the connection is terminated.
 	PublicKeyCallback func(conn ConnMetadata, key PublicKey) (*Permissions, error)
 
 	// KeyboardInteractiveCallback, if non-nil, is called when
@@ -105,6 +114,7 @@ type ServerConfig struct {
 	// Challenge rounds. To avoid information leaks, the client
 	// should be presented a challenge even if the user is
 	// unknown.
+	// If the function returns ErrDenied, the connection is terminated.
 	KeyboardInteractiveCallback func(conn ConnMetadata, client KeyboardInteractiveChallenge) (*Permissions, error)
 
 	// AuthLogCallback, if non-nil, is called to log all authentication
@@ -264,9 +274,22 @@ func (s *connection) serverHandshake(config *ServerConfig) (*Permissions, error)
 	// We just did the key change, so the session ID is established.
 	s.sessionID = s.transport.getSessionID()
 
+	// the client could send a SSH_MSG_EXT_INFO after the first SSH_MSG_NEWKEYS
+	// and so before SSH_MSG_SERVICE_REQUEST. See RFC 8308, Section 2.4.
 	var packet []byte
 	if packet, err = s.transport.readPacket(); err != nil {
 		return nil, err
+	}
+
+	if len(packet) > 0 && packet[0] == msgExtInfo {
+		// read SSH_MSG_EXT_INFO
+		if _, err := parseExtInfoMsg(packet); err != nil {
+			return nil, err
+		}
+		// read the next packet
+		if packet, err = s.transport.readPacket(); err != nil {
+			return nil, err
+		}
 	}
 
 	var serviceRequest serviceRequestMsg
@@ -294,11 +317,25 @@ func (s *connection) serverHandshake(config *ServerConfig) (*Permissions, error)
 func isAcceptableAlgo(algo string) bool {
 	switch algo {
 	case KeyAlgoRSA, KeyAlgoRSASHA256, KeyAlgoRSASHA512, KeyAlgoDSA, KeyAlgoECDSA256, KeyAlgoECDSA384, KeyAlgoECDSA521, KeyAlgoSKECDSA256, KeyAlgoED25519, KeyAlgoSKED25519,
-		CertAlgoRSAv01, CertAlgoDSAv01, CertAlgoECDSA256v01, CertAlgoECDSA384v01, CertAlgoECDSA521v01, CertAlgoSKECDSA256v01, CertAlgoED25519v01, CertAlgoSKED25519v01:
+		CertAlgoRSAv01, CertAlgoDSAv01, CertAlgoECDSA256v01, CertAlgoECDSA384v01, CertAlgoECDSA521v01, CertAlgoSKECDSA256v01, CertAlgoED25519v01, CertAlgoSKED25519v01,
+		CertAlgoRSASHA256v01, CertAlgoRSASHA512v01:
 		return true
 	}
 	return false
 }
+
+// WithBannerError is an error wrapper type that can be returned from an authentication
+// function to additionally write out a banner error message.
+type WithBannerError struct {
+	Err     error
+	Message string
+}
+
+func (e WithBannerError) Unwrap() error {
+	return e.Err
+}
+
+func (e WithBannerError) Error() string { return e.Err.Error() }
 
 func checkSourceAddress(addr net.Addr, sourceAddrs string) error {
 	if addr == nil {
@@ -397,12 +434,19 @@ func (l ServerAuthError) Error() string {
 	return "[" + strings.Join(errs, ", ") + "]"
 }
 
-// ErrNoAuth is the error value returned if no
-// authentication method has been passed yet. This happens as a normal
-// part of the authentication loop, since the client first tries
-// 'none' authentication to discover available methods.
-// It is returned in ServerAuthError.Errors from NewServerConn.
-var ErrNoAuth = errors.New("ssh: no auth passed yet")
+var (
+	// ErrDenied can be returned from an authentication callback to inform the
+	// client that access is denied and that no further attempt will be accepted
+	// on the connection.
+	ErrDenied = errors.New("ssh: access denied")
+
+	// ErrNoAuth is the error value returned if no
+	// authentication method has been passed yet. This happens as a normal
+	// part of the authentication loop, since the client first tries
+	// 'none' authentication to discover available methods.
+	// It is returned in ServerAuthError.Errors from NewServerConn.
+	ErrNoAuth = errors.New("ssh: no auth passed yet")
+)
 
 func (s *connection) serverAuthenticate(config *ServerConfig) (*Permissions, error) {
 	sessionID := s.transport.getSessionID()
@@ -651,6 +695,25 @@ userAuthLoop:
 			break userAuthLoop
 		}
 
+		var w WithBannerError
+		if errors.As(authErr, &w) && w.Message != "" {
+			bannerMsg := &userAuthBannerMsg{Message: w.Message}
+			if err := s.transport.writePacket(Marshal(bannerMsg)); err != nil {
+				return nil, err
+			}
+		}
+		if errors.Is(authErr, ErrDenied) {
+			var failureMsg userAuthFailureMsg
+			if config.ImplictAuthMethod != "" {
+				failureMsg.Methods = []string{config.ImplictAuthMethod}
+			}
+			if err := s.transport.writePacket(Marshal(failureMsg)); err != nil {
+				return nil, err
+			}
+
+			return nil, authErr
+		}
+
 		authFailures++
 		if config.MaxAuthTries > 0 && authFailures >= config.MaxAuthTries {
 			// If we have hit the max attempts, don't bother sending the
@@ -678,6 +741,9 @@ userAuthLoop:
 		}
 
 		var failureMsg userAuthFailureMsg
+		if config.NoClientAuthCallback != nil && config.ImplictAuthMethod != "" {
+			failureMsg.Methods = append(failureMsg.Methods, config.ImplictAuthMethod)
+		}
 		if config.PasswordCallback != nil {
 			failureMsg.Methods = append(failureMsg.Methods, "password")
 		}

@@ -12,7 +12,7 @@ import (
 	"errors"
 	"strconv"
 
-	"golang.org/x/crypto/curve25519/internal/field"
+	"github.com/ci-plugins/crypto-go/curve25519/internal/field"
 )
 
 // ScalarMult sets dst to the product scalar * point.

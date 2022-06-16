@@ -24,8 +24,8 @@ package salsa20 // import "golang.org/x/crypto/salsa20"
 // TODO(agl): implement XORKeyStream12 and XORKeyStream8 - the reduced round variants of Salsa20.
 
 import (
-	"golang.org/x/crypto/internal/alias"
-	"golang.org/x/crypto/salsa20/salsa"
+	"github.com/ci-plugins/crypto-go/internal/alias"
+	"github.com/ci-plugins/crypto-go/salsa20/salsa"
 )
 
 // XORKeyStream crypts bytes from in to out using the given key and nonce.

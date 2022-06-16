@@ -1,4 +1,4 @@
-module golang.org/x/crypto
+module github.com/ci-plugins/crypto-go
 
 go 1.17
 

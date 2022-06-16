@@ -11,7 +11,7 @@ import (
 	"io"
 	"testing"
 
-	"golang.org/x/crypto/openpgp/armor"
+	"github.com/ci-plugins/crypto-go/openpgp/armor"
 )
 
 func TestSignatureV3Read(t *testing.T) {

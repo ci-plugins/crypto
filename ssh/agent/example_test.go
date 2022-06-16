@@ -9,8 +9,8 @@ import (
 	"net"
 	"os"
 
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/agent"
+	"github.com/ci-plugins/crypto-go/ssh"
+	"github.com/ci-plugins/crypto-go/ssh/agent"
 )
 
 func ExampleNewClient() {

@@ -18,9 +18,9 @@ import (
 	"io"
 	"strconv"
 
-	"golang.org/x/crypto/openpgp/armor"
-	"golang.org/x/crypto/openpgp/errors"
-	"golang.org/x/crypto/openpgp/packet"
+	"github.com/ci-plugins/crypto-go/openpgp/armor"
+	"github.com/ci-plugins/crypto-go/openpgp/errors"
+	"github.com/ci-plugins/crypto-go/openpgp/packet"
 )
 
 // SignatureType is the armor type for a PGP signature.
